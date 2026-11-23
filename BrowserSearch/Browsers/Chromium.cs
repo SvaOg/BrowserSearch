@@ -16,6 +16,7 @@ namespace BrowserSearch.Browsers
         protected Dictionary<string, ChromiumProfile> Profiles { get; } = [];
         private readonly string? _selectedProfileName;
         private readonly List<HistoryResult> _history = [];
+        private readonly List<HistoryResult> _bookmarks = [];
         // Key is query, Value is a list of predictions for that query
         private readonly Dictionary<string, List<ChromiumPrediction>> _predictions = [];
 
@@ -29,18 +30,18 @@ namespace BrowserSearch.Browsers
         {
             CreateProfiles();
 
-            // Load history from all profiles
+            // Load history and bookmarks from all profiles
             if (_selectedProfileName is null)
             {
                 foreach (ChromiumProfile profile in Profiles.Values)
                 {
-                    profile.Init(_history, _predictions);
+                    profile.Init(_history, _predictions, _bookmarks);
                 }
 
                 return;
             }
 
-            // Load history from selected profile
+            // Load history and bookmarks from selected profile
             if (!Profiles.TryGetValue(_selectedProfileName.ToLower(), out ChromiumProfile? selectedProfile))
             {
                 Log.Error($"Couldn't find profile '{_selectedProfileName}'", typeof(Chromium));
@@ -48,7 +49,7 @@ namespace BrowserSearch.Browsers
 
                 return;
             }
-            selectedProfile.Init(_history, _predictions);
+            selectedProfile.Init(_history, _predictions, _bookmarks);
         }
 
         protected virtual void CreateProfiles()
@@ -100,6 +101,11 @@ namespace BrowserSearch.Browsers
             return _history;
         }
 
+        List<HistoryResult> IBrowser.GetBookmarks()
+        {
+            return _bookmarks;
+        }
+
         public int CalculateExtraScore(string query, string title, string url)
         {
             if (!_predictions.TryGetValue(query, out List<ChromiumPrediction>? predictions))
@@ -128,7 +134,7 @@ namespace BrowserSearch.Browsers
     internal class ChromiumProfile
     {
         private readonly string _path;
-        private bool _initialized;
+        private bool _initialized, _bookmarksInitialized;
         private SqliteConnection? _historyDbConnection, _predictorDbConnection;
 
         public ChromiumProfile(string path)
@@ -136,13 +142,21 @@ namespace BrowserSearch.Browsers
             _path = path;
         }
 
-        public void Init(List<HistoryResult> history, Dictionary<string, List<ChromiumPrediction>> predictions)
+        public void Init(List<HistoryResult> history, Dictionary<string, List<ChromiumPrediction>> predictions, List<HistoryResult> bookmarks)
         {
             if (_initialized)
             {
                 return;
             }
             Log.Info($"Initializing Chromium profile: '{_path}'", typeof(ChromiumProfile));
+
+            // Bookmarks don't depend on the databases, so load them even if those are missing.
+            // A profile can be registered under multiple names, so make sure to only load them once
+            if (!_bookmarksInitialized)
+            {
+                PopulateBookmarks(bookmarks);
+                _bookmarksInitialized = true;
+            }
 
             try
             {
@@ -225,26 +239,108 @@ namespace BrowserSearch.Browsers
                 string url = (string)reader[0];
                 string title = (string)reader[1];
 
-                HistoryResult result = new()
-                {
-                    URL = url,
-                    Title = title,
-                    IcoPath = BrowserInfo.IconPath,
-                    Action = action =>
-                    {
-                        // Open URL in default browser
-                        if (!Helper.OpenInShell(url))
-                        {
-                            Log.Error($"Couldn't open '{url}'", typeof(ChromiumProfile));
-                            return false;
-                        }
-
-                        return true;
-                    },
-                };
-
-                history.Add(result);
+                history.Add(CreateEntry(url, title, null));
             }
+        }
+
+        private void PopulateBookmarks(List<HistoryResult> bookmarks)
+        {
+            foreach (string fileName in new[] { "Bookmarks", "AccountBookmarks" })
+            {
+                string filePath = Path.Join(_path, fileName);
+                if (!File.Exists(filePath))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    using StreamReader jsonFileReader = new(
+                        new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)
+                    );
+                    using JsonDocument document = JsonDocument.Parse(jsonFileReader.ReadToEnd());
+
+                    if (document.RootElement.ValueKind != JsonValueKind.Object
+                        || !document.RootElement.TryGetProperty("roots", out JsonElement roots)
+                        || roots.ValueKind != JsonValueKind.Object)
+                    {
+                        Log.Warn($"Unexpected bookmarks format in '{filePath}'", typeof(ChromiumProfile));
+                        continue;
+                    }
+
+                    foreach (JsonProperty root in roots.EnumerateObject())
+                    {
+                        if (root.Name != "trash" && root.Value.ValueKind == JsonValueKind.Object)
+                        {
+                            PopulateBookmarkNode(root.Value, null, bookmarks);
+                        }
+                    }
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+                {
+                    Log.Warn($"Couldn't read bookmarks from '{filePath}': {e.Message}", typeof(ChromiumProfile));
+                }
+            }
+        }
+
+        private static void PopulateBookmarkNode(JsonElement node, string? folder, List<HistoryResult> bookmarks)
+        {
+            string? name = GetStringProperty(node, "name");
+
+            if (GetStringProperty(node, "type") == "url")
+            {
+                string? url = GetStringProperty(node, "url");
+                // Bookmarklets can't be opened from outside the browser
+                if (!string.IsNullOrEmpty(url) && !url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
+                {
+                    bookmarks.Add(CreateEntry(url, string.IsNullOrEmpty(name) ? url : name, folder));
+                }
+
+                return;
+            }
+
+            if (!node.TryGetProperty("children", out JsonElement children) || children.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            string? path = string.IsNullOrEmpty(name) ? folder : (folder is null ? name : $"{folder}/{name}");
+            foreach (JsonElement child in children.EnumerateArray())
+            {
+                if (child.ValueKind == JsonValueKind.Object)
+                {
+                    PopulateBookmarkNode(child, path, bookmarks);
+                }
+            }
+        }
+
+        private static string? GetStringProperty(JsonElement element, string propertyName)
+        {
+            return element.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
+        }
+
+        private static HistoryResult CreateEntry(string url, string title, string? folder)
+        {
+            return new()
+            {
+                URL = url,
+                Title = title,
+                Folder = folder,
+                IcoPath = BrowserInfo.IconPath,
+                Action = action =>
+                {
+                    // Open URL in default browser
+                    if (!Helper.OpenInShell(url))
+                    {
+                        Log.Error($"Couldn't open '{url}'", typeof(ChromiumProfile));
+                        return false;
+                    }
+
+                    return true;
+                },
+            };
         }
     }
 }

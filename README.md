@@ -1,6 +1,13 @@
 # BrowserSearch
 This is a plugin for PowerToys Run.
-It reads your default browser's history, allowing you to search its entries and open their URL.
+It reads your default browser's history and bookmarks, allowing you to search their entries and open their URL.
+
+## Search sources
+The plugin's settings in PowerToys have two independent checkboxes:
+* **Search history** (enabled by default)
+* **Search bookmarks** (disabled by default, only supported on Chromium-based browsers)
+
+When both are enabled, a URL that is both bookmarked and in the history is shown once, as a bookmark.
 
 <p align="center">
     <img src="./Screenshots/1.png" width="500"/>
@@ -37,15 +44,24 @@ Support for any other browser based on Chromium or Firefox can be added easily. 
 * Start PowerToys
 
 ## Build instructions
-* Clone this repo
-* Inside the `BrowserSearch` folder, create another one called `libs`
-* Copy the following files from `%ProgramFiles%\PowerToys\` to `libs`
-    * Wox.Plugin.dll
-    * Wox.Infrastructure.dll
-    * Microsoft.Data.Sqlite.dll
-    * PowerToys.Settings.UI.Lib.dll
-* Now you have two options:
-  * To make a debug build, open the project in Visual Studio, build it and copy the output folder `BrowserSearch\bin\Debug` to `%LOCALAPPDATA%\Microsoft\PowerToys\PowerToys Run\Plugins\`.
-  * To make a release build, use the `publish.ps1` script.
-    * This will output all the necessary files to the `PublishOutput` folder.
-    * The plugin will automatically be copied to `%LOCALAPPDATA%\Microsoft\PowerToys\PowerToys Run\Plugins\BrowserSearch\`
+Requirements:
+* [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+* [just](https://github.com/casey/just)
+* [PowerShell 7+](https://github.com/PowerShell/PowerShell) (`pwsh`)
+* PowerToys 0.102.0 or newer, installed per-user or per-machine
+
+Clone this repo and run the recipes from its root folder:
+
+| Command | Description |
+|---|---|
+| `just` | List the available recipes |
+| `just clean` | Remove `bin`, `obj`, `libs` and `PublishOutput` |
+| `just check` | Check that PowerToys is installed, is new enough and targets the same .NET version as the project |
+| `just libs` | Run `check`, then copy the required PowerToys DLLs to `BrowserSearch\libs` |
+| `just build` | Run `libs`, then make a release build |
+| `just publish` | Run `build`, then output all the necessary files to the `PublishOutput` folder |
+| `just install` | Run `publish`, then copy the plugin to `%LOCALAPPDATA%\Microsoft\PowerToys\PowerToys Run\Plugins\BrowserSearch\` |
+
+If PowerToys is running, `just install` stops all of its processes (closing the Settings window if it's open) and starts it again afterwards. If PowerToys is running as administrator, run the recipe from an elevated shell.
+
+To make a debug build, use `just configuration=Debug build`.
