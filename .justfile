@@ -107,12 +107,43 @@ install: publish
             $processes | Wait-Process -Timeout 15
         }
 
-        if (Test-Path '{{ plugin_dir }}') {
-            Remove-Item '{{ plugin_dir }}' -Recurse -Force
+        # Windows can keep the DLL locked briefly after PowerToys exits. Moving the
+        # folder is all-or-nothing, so a locked file can't leave a partial install
+        $pluginDir = '{{ plugin_dir }}'
+        $backupDir = Join-Path $env:TEMP "BrowserSearch-$([guid]::NewGuid().ToString('N'))"
+        $hasBackup = $false
+        if (Test-Path $pluginDir) {
+            $deadline = (Get-Date).AddSeconds(15)
+            while (-not $hasBackup) {
+                try {
+                    [IO.Directory]::Move($pluginDir, $backupDir)
+                    $hasBackup = $true
+                }
+                catch {
+                    if ((Get-Date) -ge $deadline) {
+                        throw
+                    }
+                    Start-Sleep -Milliseconds 250
+                }
+            }
         }
-        New-Item -ItemType Directory -Path '{{ plugin_dir }}' > $null
-        Copy-Item '{{ publish_dir }}\*' '{{ plugin_dir }}' -Recurse
-        Write-Host 'Plugin installed to {{ plugin_dir }}'
+
+        try {
+            New-Item -ItemType Directory -Path $pluginDir > $null
+            Copy-Item '{{ publish_dir }}\*' $pluginDir -Recurse
+        }
+        catch {
+            Remove-Item $pluginDir -Recurse -Force -ErrorAction SilentlyContinue
+            if ($hasBackup) {
+                [IO.Directory]::Move($backupDir, $pluginDir)
+            }
+            throw
+        }
+
+        if ($hasBackup) {
+            Remove-Item $backupDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host "Plugin installed to $pluginDir"
     }
     finally {
         if ($runnerPath) {
