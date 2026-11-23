@@ -18,7 +18,7 @@ namespace Community.Powertoys.Run.Plugin.BrowserSearch
     {
         public static string PluginID => "E5A9FC7A3F7F4320BE612DA95C57C32D";
         public string Name => "Browser Search";
-        public string Description => "Searches in your browser's history.";
+        public string Description => "Searches in your browser's history and bookmarks.";
 
         public IEnumerable<PluginAdditionalOption> AdditionalOptions => new List<PluginAdditionalOption>()
         {
@@ -34,19 +34,40 @@ namespace Community.Powertoys.Run.Plugin.BrowserSearch
             {
                 Key = SingleProfile,
                 DisplayLabel = "Browser profile",
-                DisplayDescription = "The name of the browser profile whose history will be loaded.\n" +
-                                     "If empty, the history of ALL profiles will be loaded.",
+                DisplayDescription = "The name of the browser profile whose history and bookmarks will be loaded.\n" +
+                                     "If empty, the history and bookmarks of ALL profiles will be loaded.",
                 PluginOptionType = PluginAdditionalOption.AdditionalOptionType.Textbox
+            },
+            new()
+            {
+                Key = SearchHistory,
+                DisplayLabel = "Search history",
+                DisplayDescription = "Include the browser's history in the search results.",
+                PluginOptionType = PluginAdditionalOption.AdditionalOptionType.Checkbox,
+                Value = true
+            },
+            new()
+            {
+                Key = SearchBookmarks,
+                DisplayLabel = "Search bookmarks",
+                DisplayDescription = "Include the browser's bookmarks in the search results.\n" +
+                                     "Only supported on Chromium-based browsers.",
+                PluginOptionType = PluginAdditionalOption.AdditionalOptionType.Checkbox,
+                Value = false
             }
         };
 
         private const string MaxResults = nameof(MaxResults);
         private const string SingleProfile = nameof(SingleProfile);
+        private const string SearchHistory = nameof(SearchHistory);
+        private const string SearchBookmarks = nameof(SearchBookmarks);
         private PluginInitContext? _context;
         private IBrowser? _defaultBrowser;
         private long _lastUpdateTickCount = -300L;
         private int _maxResults;
         private string? _selectedProfileName;
+        private bool _searchHistory = true;
+        private bool _searchBookmarks;
 
         public void Init(PluginInitContext context)
         {
@@ -78,6 +99,8 @@ namespace Community.Powertoys.Run.Plugin.BrowserSearch
         public void UpdateSettings(PowerLauncherPluginSettings settings)
         {
             _maxResults = (int)(settings?.AdditionalOptions?.FirstOrDefault(x => x.Key == MaxResults)?.NumberValue ?? 15);
+            _searchHistory = settings?.AdditionalOptions?.FirstOrDefault(x => x.Key == SearchHistory)?.Value ?? true;
+            _searchBookmarks = settings?.AdditionalOptions?.FirstOrDefault(x => x.Key == SearchBookmarks)?.Value ?? false;
 
             PluginAdditionalOption? profile = settings?.AdditionalOptions?.FirstOrDefault(x => x.Key == SingleProfile);
             if (profile is not null && profile.TextValue?.Length > 0)
@@ -229,19 +252,19 @@ namespace Community.Powertoys.Run.Plugin.BrowserSearch
                 return [];
             }
 
-            List<HistoryResult> history = _defaultBrowser.GetHistory();
+            List<HistoryResult> entries = GetSearchEntries();
             // Happens when the user only types our ActionKeyword ("b?" by default)
             if (string.IsNullOrEmpty(query.Search))
             {
-                // Returning the whole history here makes the search lag, so return only some entries
+                // Returning all the entries here makes the search lag, so return only some of them
                 int amount = _maxResults == -1 ? 15 : _maxResults;
-                return [.. history.TakeLast(amount).Select(r => r.ToResult())];
+                return [.. entries.TakeLast(amount).Select(r => r.ToResult())];
             }
 
-            List<Result> results = new(history.Count);
-            for (int i = 0; i < history.Count; i++)
+            List<Result> results = new(entries.Count);
+            for (int i = 0; i < entries.Count; i++)
             {
-                HistoryResult r = history[i];
+                HistoryResult r = entries[i];
 
                 int score = CalculateScore(query.Search, r.Title, r.URL);
                 if (score <= 0)
@@ -262,6 +285,22 @@ namespace Community.Powertoys.Run.Plugin.BrowserSearch
             }
 
             return results;
+        }
+
+        private List<HistoryResult> GetSearchEntries()
+        {
+            List<HistoryResult> history = _searchHistory ? _defaultBrowser!.GetHistory() : [];
+            if (!_searchBookmarks)
+            {
+                return history;
+            }
+
+            // The same bookmark can exist in multiple profiles
+            List<HistoryResult> bookmarks = [.. _defaultBrowser!.GetBookmarks().DistinctBy(b => b.URL)];
+            HashSet<string> bookmarkedUrls = [.. bookmarks.Select(b => b.URL)];
+
+            // Bookmarks go last since the empty query takes entries from the end of the list
+            return [.. history.Where(h => !bookmarkedUrls.Contains(h.URL)), .. bookmarks];
         }
 
         private int CalculateScore(string query, string title, string url)

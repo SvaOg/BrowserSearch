@@ -7,6 +7,7 @@ namespace BrowserSearch.Browsers
     {
         void Init();
         List<HistoryResult> GetHistory();
+        List<HistoryResult> GetBookmarks();
         int CalculateExtraScore(string query, string title, string url);
     }
 }

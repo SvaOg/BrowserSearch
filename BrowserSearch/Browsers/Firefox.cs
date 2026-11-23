@@ -85,6 +85,12 @@ namespace BrowserSearch.Browsers
             return _history;
         }
 
+        List<HistoryResult> IBrowser.GetBookmarks()
+        {
+            // Bookmarks are currently only supported on Chromium-based browsers
+            return [];
+        }
+
         public int CalculateExtraScore(string query, string title, string url)
         {
             // The history entries are stored in the _history list

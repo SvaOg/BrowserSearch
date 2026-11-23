@@ -1,6 +1,13 @@
 # BrowserSearch
 This is a plugin for PowerToys Run.
-It reads your default browser's history, allowing you to search its entries and open their URL.
+It reads your default browser's history and bookmarks, allowing you to search their entries and open their URL.
+
+## Search sources
+The plugin's settings in PowerToys have two independent checkboxes:
+* **Search history** (enabled by default)
+* **Search bookmarks** (disabled by default, only supported on Chromium-based browsers)
+
+When both are enabled, a URL that is both bookmarked and in the history is shown once, as a bookmark.
 
 <p align="center">
     <img src="./Screenshots/1.png" width="500"/>
